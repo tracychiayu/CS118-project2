@@ -33,27 +33,45 @@ int main(int argc, char** argv) {
     bind(sockfd, (struct sockaddr*) &server_addr, sizeof(server_addr));
 
     // Listen for new clients
-    // listen()
+    listen(sockfd, 5);
 
     struct sockaddr_in client_addr; // Same information, but about client
     socklen_t client_size = sizeof(client_addr);
 
     // Accept client connection
-    // clientfd = accept()
+    int clientfd = accept(sockfd, (struct sockaddr*) &client_addr, &client_size);
+    if (clientfd < 0) {
+        perror("accept");
+        exit(1);
+    }
 
     // Set the socket nonblocking
-    // int flags = fcntl(clientfd, F_GETFL);
-    // flags |= O_NONBLOCK;
-    // fcntl(clientfd, F_SETFL, flags);
-    // setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int));
-    // setsockopt(clientfd, SOL_SOCKET, SO_REUSEPORT, &(int) {1}, sizeof(int));
+    int flags = fcntl(clientfd, F_GETFL);
+    flags |= O_NONBLOCK;
+    fcntl(clientfd, F_SETFL, flags);
+    setsockopt(clientfd, SOL_SOCKET, SO_REUSEADDR, &(int) {1}, sizeof(int));
+    setsockopt(clientfd, SOL_SOCKET, SO_REUSEPORT, &(int) {1}, sizeof(int));
 
+    // Initialize 'state_sec' for server
     init_sec(SERVER_CLIENT_HELLO_AWAIT, NULL, argc > 2);
-    // while (clientfd) {
-    //     // receive data
-    //     // send data
-    // }
-    // close(clientfd);
-    // close(sockfd);
-    // return 0;
+    uint8_t buffer[2048];
+    ssize_t len;
+    while (clientfd) {
+        // receive data
+        len = recv(clientfd, buffer, sizeof(buffer), 0);
+        if (len > 0) {
+            output_sec(buffer, len);
+        }
+
+        memset(buffer, 0, sizeof(buffer)); // clear the buffer before reuse
+
+        // send data
+        len = input_sec(buffer, sizeof(buffer));
+        if (len > 0) {
+            send(clientfd, buffer, len, 0);
+        }
+    }
+    close(clientfd);
+    close(sockfd);
+    return 0;
 }
