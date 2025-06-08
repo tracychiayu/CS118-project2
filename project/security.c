@@ -45,15 +45,15 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
 
         // Generate EC key pair (private/public)
         generate_private_key();  // 'ec_priv_key'
-        derive_public_key();     // using private key 'ec_priv_key'
+        derive_public_key();     // using private key 'ec_priv_key' to generate 'public_key'
         tlv* pk = create_tlv(PUBLIC_KEY);
         add_val(pk, public_key, pub_key_size);
         add_tlv(ch, pk);
 
         // Serialize TLV into bytes by writing it directly to the transport layer
-        uint16_t len = serialize_tlv(buf, ch);
+        uint16_t len = serialize_tlv(buf, ch);   // serialize(ch + nn + pk) -> buf
         client_hello = ch; // save for later transcript use
-        ts_len = len;      // transcript length
+        ts_len = len;      // transcript length (first half)
         memcpy(ts, buf, len); // Copy serialized ClientHello into ts (transcript)
 
         state_sec = CLIENT_SERVER_HELLO_AWAIT;
@@ -73,23 +73,33 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         add_tlv(sh, nn);          // Add Nonce TLV into ServerHello TLV
 
         load_certificate("server_cert.bin"); // Load certificate
-        tlv* cert = create_tlv(CERTIFICATE);
-        add_val(cert, certificate, cert_size);
+        tlv* cert = deserialize_tlv(certificate, cert_size);  // recursively parse each TLVs: certificate(A0) -> DNS name (A1) + cert's public key (02) + signature (A2)
+                                                              // signature over "DNS name + cert's public key" created using CA's public key  
         add_tlv(sh, cert);
 
         // Load server's private key and derive its public key
-        load_private_key("server_key.bin");
-        derive_public_key();
+        load_private_key("server_key.bin");  // 'ec_priv_key'
+        derive_public_key();                 // 'public_key'
         tlv* pk = create_tlv(PUBLIC_KEY);
         add_val(pk, public_key, pub_key_size);
         add_tlv(sh, pk);
         
-        // Create signature
+        // Create signature, TODO: Server Hello in unrecognised form
+        // ServerHello(sh):
+        //      SERVER HELLO TLV
+        //          NONCE
+        //          CERTIFICATE (DNS name, cert public key, signature over dns-name & public key)
+        //          PUBLIC KEY
+        //          HANDSHAKE SIGNATURE (signs all TLVs above, except itself)
         uint8_t tmp[2048];
-        uint16_t temp_len = serialize_tlv(tmp, client_hello) + serialize_tlv(tmp + ts_len, sh);
+        uint16_t ch_len = serialize_tlv(tmp, client_hello);
+        uint16_t sh_len = serialize_tlv(tmp + ch_len, sh);
 
+        // Sign everything up to this point
         uint8_t sig[72];
-        size_t sig_len = sign(sig, tmp, temp_len);
+        size_t sig_len = sign(sig, tmp, ch_len + sh_len);   // sign ClientHello || ServerHello
+
+        // Add signature to ServerHello
         tlv* sig_tlv = create_tlv(HANDSHAKE_SIGNATURE);
         add_val(sig_tlv, sig, sig_len);
         add_tlv(sh, sig_tlv);
@@ -101,8 +111,11 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         ts_len += len;
 
         // Derive symmetric key (shared secret)
-        derive_secret();          // use ec_priv_key and ec_peer_public_key
-        derive_keys(ts, ts_len);  // generate ENC key & MAC key
+        derive_secret();          // use server's 'ec_priv_key' and client's 'ec_peer_public_key'
+        derive_keys(ts, ts_len);  // generate 'enc_key' & 'mac_key'
+
+        // DEBUG
+        print_tlv_bytes(buf, len);
 
         state_sec = SERVER_FINISHED_AWAIT;
         return len;
@@ -201,7 +214,7 @@ void output_sec(uint8_t* buf, size_t length) {
             fprintf(stderr, "ERROR: Missing or invalid PUBLIC_KEY in ClientHello\n");
             exit(6); 
         }
-        load_peer_public_key(pk->val, pk->length);
+        load_peer_public_key(pk->val, pk->length);  // 'ec_peer_public_key'
 
         state_sec = SERVER_SERVER_HELLO_SEND;
 
@@ -224,39 +237,33 @@ void output_sec(uint8_t* buf, size_t length) {
         // Extract certificate, server's public key, and signature from ServerHello
         tlv* cert = get_tlv(server_hello, CERTIFICATE);
         if (!cert || !cert->val || cert->length == 0){ 
-            fprintf(stderr, "Error: Missing or invalid CERTIFICATE in ServerHello\n");
             exit(6); 
         }
 
         tlv* pk = get_tlv(server_hello, PUBLIC_KEY);
         if (!pk || !pk->val || pk->length == 0){ 
-            fprintf(stderr, "Error: Missing or invalid PUBLIC_KEY in ServerHello\n");
             exit(6); 
         }
         
 
         tlv* sig = get_tlv(server_hello, HANDSHAKE_SIGNATURE);  // signature over sh + nn + cert + pk
         if (!sig || !sig->val || sig->length == 0) {
-            fprintf(stderr, "Error: Missing or invalid HANDSHAKE_SIGNATURE in ServerHello\n");
             exit(6);
         }
 
         // Extract DNS name, server's long term public key, and signature TLVs from certificate TLV
         tlv* dns = get_tlv(cert, DNS_NAME);
         if (!dns || !dns->val || dns->length == 0){
-            fprintf(stderr, "Error: Missing DNS name in certificate\n");
             exit(2);
         }
 
         tlv* cert_pk = get_tlv(cert, PUBLIC_KEY);
         if (!cert_pk || !cert_pk->val || cert_pk->length == 0) {
-            fprintf(stderr, "Error: Missing or invalid public key in certificate\n");
             exit(6);
         }
 
         tlv* cert_sig = get_tlv(cert, SIGNATURE);
         if (!cert_sig || !cert_sig->val || cert_sig->length == 0) {
-            fprintf(stderr, "Error: Missing or invalid signature in certificate\n");
             exit(1);
         }
 
