@@ -70,19 +70,29 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         generate_nonce(nonce, NONCE_SIZE);
         tlv* nn = create_tlv(NONCE);
         add_val(nn, nonce, NONCE_SIZE);
-        add_tlv(sh, nn);          // Add Nonce TLV into ServerHello TLV
+        // add_tlv(sh, nn);         // DO THIS AFTER SIGN
 
         load_certificate("server_cert.bin"); // Load certificate
         tlv* cert = deserialize_tlv(certificate, cert_size);  // recursively parse each TLVs: certificate(A0) -> DNS name (A1) + cert's public key (02) + signature (A2)
                                                               // signature over "DNS name + cert's public key" created using CA's public key  
-        add_tlv(sh, cert);
+        // add_tlv(sh, cert);       // DO THIS AFTER SIGN 
 
         // Load server's private key and derive its public key
         load_private_key("server_key.bin");  // 'ec_priv_key'
         derive_public_key();                 // 'public_key'
         tlv* pk = create_tlv(PUBLIC_KEY);
         add_val(pk, public_key, pub_key_size);
-        add_tlv(sh, pk);
+        // add_tlv(sh, pk);         // DO THIS AFTER SIGN 
+
+        // TLVs so far: sh, nn, cert, pk
+
+        // Serialize input for signing: client_hello || nn || cert || pk
+        uint8_t tmp[2048];
+        uint16_t offset = 0;  // signature input length
+        offset += serialize_tlv(tmp, client_hello);
+        offset += serialize_tlv(tmp + offset, nn);
+        offset += serialize_tlv(tmp + offset, cert);
+        offset += serialize_tlv(tmp + offset, pk);
         
         // Create signature, TODO: Server Hello in unrecognised form
         // ServerHello(sh):
@@ -91,17 +101,23 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         //          CERTIFICATE (DNS name, cert public key, signature over dns-name & public key)
         //          PUBLIC KEY
         //          HANDSHAKE SIGNATURE (signs all TLVs above, except itself)
-        uint8_t tmp[2048];
-        uint16_t ch_len = serialize_tlv(tmp, client_hello);
-        uint16_t sh_len = serialize_tlv(tmp + ch_len, sh);
+        // uint8_t tmp[2048];
+        // uint16_t ch_len = serialize_tlv(tmp, client_hello);
+        // uint16_t sh_len = serialize_tlv(tmp + ch_len, sh);
 
         // Sign everything up to this point
         uint8_t sig[72];
-        size_t sig_len = sign(sig, tmp, ch_len + sh_len);   // sign ClientHello || ServerHello
+        size_t sig_len = sign(sig, tmp, offset);   // sign client_hello || nn || cert || pk
 
         // Add signature to ServerHello
         tlv* sig_tlv = create_tlv(HANDSHAKE_SIGNATURE);
         add_val(sig_tlv, sig, sig_len);
+        // add_tlv(sh, sig_tlv);        // DO THIS LATER
+
+        // Append all TLVs after Server Hello TLV, sh
+        add_tlv(sh, nn);
+        add_tlv(sh, cert);
+        add_tlv(sh, pk);
         add_tlv(sh, sig_tlv);
 
         // Serialize and cache final ServerHello
