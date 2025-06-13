@@ -30,6 +30,19 @@ void hostname_to_ip(const char* hostname, char* ip) {
     exit(255);
 }
 
+void safe_send(int fd, const uint8_t* buf, ssize_t len) {
+    ssize_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(fd, buf + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+            perror("send");
+            exit(1);
+        }
+        sent += n;
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "Usage: client <hostname> <port> \n");
@@ -71,16 +84,25 @@ int main(int argc, char** argv) {
         // receive data
         len = input_sec(buffer, sizeof(buffer));
         if (len > 0){
-            send(sockfd, buffer, len, 0);
+            // send(sockfd, buffer, len, 0);
+            safe_send(sockfd, buffer, len);
         }
 
-        memset(buffer, 0, sizeof(buffer)); // clear the buffer before reuse
+        // memset(buffer, 0, sizeof(buffer)); // clear the buffer before reuse
 
         // send data
         len = recv(sockfd, buffer, sizeof(buffer), 0);
         if (len > 0){
             output_sec(buffer, len);
         }
+        else if (len <= 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+            continue;
+        }
+        else if (len < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)){
+            perror("recv");
+            exit(1);
+        }
+
     }
     close(sockfd);
     return 0;

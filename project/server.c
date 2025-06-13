@@ -8,6 +8,19 @@
 #include <errno.h>
 #include <sys/fcntl.h>
 
+void safe_send(int fd, const uint8_t* buf, ssize_t len) {
+    ssize_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(fd, buf + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+            perror("send");
+            exit(1);
+        }
+        sent += n;
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: server <port>\n");
@@ -62,14 +75,23 @@ int main(int argc, char** argv) {
         if (len > 0) {
             output_sec(buffer, len);
         }
+        else if (len <= 0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+            continue;
+        }
+        else if (len < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)){
+            perror("recv");
+            exit(1);
+        }
 
-        memset(buffer, 0, sizeof(buffer)); // clear the buffer before reuse
+        // memset(buffer, 0, sizeof(buffer)); // clear the buffer before reuse
 
         // send data
         len = input_sec(buffer, sizeof(buffer));
         if (len > 0) {
-            send(clientfd, buffer, len, 0);
+            // send(clientfd, buffer, len, 0);
+            safe_send(clientfd, buffer, len);
         }
+
     }
     close(clientfd);
     close(sockfd);
