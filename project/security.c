@@ -176,18 +176,18 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         return len;
     }
     case DATA_STATE: {
-        // uint8_t plaintext[943];
-        // ssize_t input_len = input_io(plaintext, sizeof(plaintext));
+        uint8_t plaintext[943];
+        ssize_t input_len = input_io(plaintext, sizeof(plaintext));
 
-        // if (input_len < 0){  // No data to send
-        //     return 0;
-        // }
+        if (input_len <= 0){  // No data available yet or reach EOF
+            return 0;
+        }
 
-        // uint8_t iv[IV_SIZE];
+        uint8_t iv[IV_SIZE];
         // generate_nonce(iv, IV_SIZE);
 
-        // uint8_t ciphertext[944];
-        // size_t cipher_len = encrypt_data(iv, ciphertext, plaintext, sizeof(plaintext));
+        uint8_t ciphertext[944];
+        size_t cipher_len = encrypt_data(iv, ciphertext, plaintext, input_len);  // return size of ciphertext
 
         // // Calculate HMAC over IV + ciphertext
         // uint8_t digest[32];
@@ -197,25 +197,42 @@ ssize_t input_sec(uint8_t* buf, size_t max_length) {
         // memcpy(data + IV_SIZE, ciphertext, cipher_len);
         // hmac(digest, data, IV_SIZE+cipher_len);
 
-        // // Create TLVs
-        // tlv* t_iv = create_tlv(IV);
-        // add_val(t_iv, iv, IV_SIZE);
+        // Create TLVs
+        tlv* t_iv = create_tlv(IV);
+        add_val(t_iv, iv, IV_SIZE);
 
-        // tlv* t_cipher = create_tlv(CIPHERTEXT);
-        // add_val(t_cipher, ciphertext, cipher_len);
+        tlv* t_cipher = create_tlv(CIPHERTEXT);
+        add_val(t_cipher, ciphertext, cipher_len);
 
-        // tlv* t_mac = create_tlv(MAC);
-        // add_val(t_mac, digest, digest_len);
+        // Calculate HMAC over IV + ciphertext
+        uint8_t digest[32];
+        // unsigned int digest_len = 32;
+        
+        uint8_t data[2048];         // Store 51-IV + 52-cipher
+        uint16_t data_len = 0;
+        data_len += serialize_tlv(data, t_iv);
+        data_len += serialize_tlv(data + data_len, t_cipher);
 
-        // tlv* t_data = create_tlv(DATA);
-        // add_tlv(t_data, t_iv);
-        // add_tlv(t_data, t_cipher);
-        // add_tlv(t_data, t_mac);
+        hmac(digest, data, data_len);
 
-        // ssize_t len = serialize_tlv(buf, t_data);
+        tlv* t_mac = create_tlv(MAC);
+        add_val(t_mac, digest, 32);
 
+        tlv* t_data = create_tlv(DATA);
+        add_tlv(t_data, t_iv);
+        add_tlv(t_data, t_cipher);
+        add_tlv(t_data, t_mac);
 
-        return 0;
+        ssize_t len = serialize_tlv(buf, t_data);
+
+        free_tlv(t_data);
+
+        // DEBUG
+        fprintf(stderr, "\n");
+        fprintf(stderr, "DEBUG: send data\n");
+        print_tlv_bytes(buf, len);
+
+        return len;
     }
     default:
         return 0;
@@ -377,29 +394,51 @@ void output_sec(uint8_t* buf, size_t length) {
         return;
     }
     case DATA_STATE: {
-        // tlv* t_data = deserialize_tlv(buf, length);
+        // DEBUG
+        fprintf(stderr, "\n");
+        fprintf(stderr, "RECV DATA:\n");
+        print_tlv_bytes(buf, length);
+        fprintf(stderr, "\n");
 
-        // tlv* t_iv = get_tlv(t_data, IV);
-        // tlv* t_cipher = get_tlv(t_data, CIPHERTEXT);
-        // tlv* t_mac = get_tlv(t_data, MAC);
+        tlv* t_data = deserialize_tlv(buf, length);
 
-        // // Calculate and verify HMAC on received IV + Ciphertext
-        // uint8_t digest[32];
-        // uint8_t data[2048];           // Store received IV and ciphertext
+        tlv* t_iv = get_tlv(t_data, IV);
+        tlv* t_cipher = get_tlv(t_data, CIPHERTEXT);
+        tlv* t_mac = get_tlv(t_data, MAC);
+
+        fprintf(stderr, "\nIV: %d\n", t_iv->length);
+        print_hex(t_iv->val, t_iv->length);
+        fprintf(stderr, "Ciphertext: %d\n", t_cipher->length);
+        print_hex(t_cipher->val, t_cipher->length);
+        fprintf(stderr, "MAC: %d\n", t_mac->length);
+        print_hex(t_mac->val, t_mac->length);
+
+        // Calculate and verify HMAC on received IV + Ciphertext
+        uint8_t digest[32];
+        uint8_t data[2048];           // Store received IV and ciphertext TLVs
+        uint16_t data_len = 0;
+        data_len += serialize_tlv(data, t_iv);
+        data_len += serialize_tlv(data+data_len, t_cipher);
+
         // memcpy(data, t_iv->val, t_iv->length);
         // memcpy(data + t_iv->length, t_cipher->val, t_cipher->length);
-        // hmac(digest, data, t_iv->length + t_cipher->length);
+        hmac(digest, data, data_len);
 
-        // if (memcmp(digest, t_mac->val, 32) != 0){
-        //     fprintf(stderr, "Error: MAC verification failed\n");
-        //     exit(5);
-        // }
+        fprintf(stderr, "\nEstimated digest (MAC):");
+        print_hex(digest, 32);
 
-        // // Decrypt ciphertext to plaintext and output the data
-        // uint8_t plaintext[1024];
-        // int plain_len = decrypt_cipher(plaintext, t_cipher->val, t_cipher->length, t_iv->val);
+        fprintf(stderr, "memcmp(digest, t_mac->val, 32) == %d\n", memcmp(digest, t_mac->val, 32));
+        if (memcmp(digest, t_mac->val, 32) != 0){
+            fprintf(stderr, "Error: MAC verification failed\n");
+            exit(5);
+        }
 
-        // output_io(plaintext, plain_len);
+        // Decrypt ciphertext to plaintext and output the data
+        uint8_t plaintext[1024];
+        int plain_len = decrypt_cipher(plaintext, t_cipher->val, t_cipher->length, t_iv->val); // return size of plaintext
+
+        output_io(plaintext, plain_len);
+        free_tlv(t_data);
         break;
         return;
     }

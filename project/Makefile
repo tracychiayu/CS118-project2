@@ -9,6 +9,10 @@ LDLIBS=-lcrypto
 # OPENSSL_PREFIX := /opt/homebrew/opt/openssl
 # CPPFLAGS=-Wall -Wextra -I$(OPENSSL_PREFIX)/include
 # LDFLAGS=-L$(OPENSSL_PREFIX)/lib
+OPENSSL_PREFIX := /opt/homebrew/opt/openssl
+CPPFLAGS=-Wall -Wextra -I$(OPENSSL_PREFIX)/include
+LDFLAGS=-L$(OPENSSL_PREFIX)/lib
+LDLIBS=-lcrypto
 
 DEPS=io.o libsecurity.o security.o
 
